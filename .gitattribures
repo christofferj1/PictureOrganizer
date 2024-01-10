@@ -1,0 +1,2 @@
+#  To ensure that text files that any contributor introduces to the repository have their line endings normalized
+*	text=auto
