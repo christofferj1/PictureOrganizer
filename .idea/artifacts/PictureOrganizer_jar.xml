@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="PictureOrganizer:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/PictureOrganizer_jar</output-path>
+    <root id="archive" name="PictureOrganizer.jar">
+      <element id="module-output" name="PictureOrganizer" />
+    </root>
+  </artifact>
+</component>
