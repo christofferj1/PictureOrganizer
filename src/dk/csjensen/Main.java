@@ -9,7 +9,7 @@ import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class Main
@@ -59,22 +59,33 @@ public class Main
         final FileTime fileTime = attributes.lastModifiedTime();
         final String month = fileTime.toString().substring(5, 7); // String format is yyyy-MM-dd...
 
-        final String targetFileName = rename && fileNameIsNotDateTime(path.getFileName().toString()) ? dateFileName(path, fileTime.toString(), fileNamesUsed) : path.getFileName().toString();
+        // Collect names in target directory and names used to find duplicates
+        List<String> fileNamesToAvoid = new ArrayList<>();
+        fileNamesToAvoid.addAll(fileNamesUsed);
+        fileNamesToAvoid.addAll(fileNamesUsedInTargetLocation(month));
+        final String targetFileName = rename ? dateFileName(path, fileTime.toString(), fileNamesToAvoid) : path.getFileName().toString();
 
         fileNamesUsed.add(targetFileName);
 
         final Path target = Path.of(month, targetFileName);
 
-        Files.move(path, target);
+        try {
+          Files.move(path, target);
+        } catch (IOException e) {
+          System.out.println("Unable to move " + path.getFileName() + " to " + target);
+          throw e;
+        }
       }
     }
   }
 
-  private static boolean fileNameIsNotDateTime(final String fileName)
+  private static List<String> fileNamesUsedInTargetLocation(final String targetDirectoryName) throws IOException
   {
-    // Checks if the file name is NOT dddddddd_dddddd.<ext> ('d' means digit)
-    // It should only rename files that aren't already in a date time format
-    return !Pattern.matches("\\d{8}_\\d{6}\\..+", fileName);
+    final File targetDirectory = new File(targetDirectoryName);
+    if (!targetDirectory.exists() || !targetDirectory.isDirectory())
+      throw new RuntimeException("Target directory '" + targetDirectoryName + "' does not exists");
+    final List<Path> filesInTarget = Files.list(targetDirectory.toPath()).toList();
+    return filesInTarget.stream().map(p -> p.getFileName().toString()).collect(Collectors.toList());
   }
 
   private static String dateFileName(final Path path, final String fileTime, final List<String> fileNamesUsed)
@@ -92,6 +103,7 @@ public class Main
 
   private static String handleFileNameCollisions(List<String> fileNamesUsed, String fileName)
   {
+
     // Check if the file name exists on the target, and if so, add a number like this:
     // 20240206_123456.jpg -> 20240206_123456_1.jpg (increment the number when multiple duplicates exists)
     while (fileNamesUsed.contains(fileName)) {
