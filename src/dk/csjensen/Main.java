@@ -5,7 +5,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -28,6 +27,8 @@ public class Main
     }
 
     final boolean rename = args.length == 2 && args[1].equalsIgnoreCase("rename");
+
+    System.out.printf("Organizing pictures from %s%s\n", directory, rename ? " while RENAMING" : "");
 
     create_directories();
 
@@ -52,23 +53,18 @@ public class Main
 
   private static void moveFiles(final File directory, final boolean rename) throws IOException
   {
-    final List<String> fileNamesUsed = new ArrayList<>();
     try (Stream<Path> paths = Files.list(directory.toPath())) {
       for (Path path : paths.toList()) {
-        BasicFileAttributes attributes = Files.readAttributes(path, BasicFileAttributes.class);
-        final FileTime fileTime = attributes.lastModifiedTime();
-        final String month = fileTime.toString().substring(5, 7); // String format is yyyy-MM-dd...
+        final String fileTime = Files.readAttributes(path, BasicFileAttributes.class).lastModifiedTime().toString();
 
-        // Collect names in target directory and names used to find duplicates
-        List<String> fileNamesToAvoid = new ArrayList<>();
-        fileNamesToAvoid.addAll(fileNamesUsed);
-        fileNamesToAvoid.addAll(fileNamesUsedInTargetLocation(month));
-        final String targetFileName = rename ? dateFileName(path, fileTime.toString(), fileNamesToAvoid) : path.getFileName().toString();
+        String targetFileName = path.getFileName().toString();
+        if (rename)
+          targetFileName = dateFileName(targetFileName, fileTime);
 
-        fileNamesUsed.add(targetFileName);
+        final String month = fileTime.substring(5, 7); // String format is yyyy-MM-dd...
+        targetFileName = handleFileNameCollisions(targetFileName, month);
 
         final Path target = Path.of(month, targetFileName);
-
         try {
           Files.move(path, target);
         } catch (IOException e) {
@@ -79,41 +75,74 @@ public class Main
     }
   }
 
-  private static List<String> fileNamesUsedInTargetLocation(final String targetDirectoryName) throws IOException
-  {
-    final File targetDirectory = new File(targetDirectoryName);
-    if (!targetDirectory.exists() || !targetDirectory.isDirectory())
-      throw new RuntimeException("Target directory '" + targetDirectoryName + "' does not exists");
-    final List<Path> filesInTarget = Files.list(targetDirectory.toPath()).toList();
-    return filesInTarget.stream().map(p -> p.getFileName().toString()).collect(Collectors.toList());
-  }
-
-  private static String dateFileName(final Path path, final String fileTime, final List<String> fileNamesUsed)
+  private static String dateFileName(final String fileName, final String fileTime)
   {
     final String date = fileTime.substring(0, 10).replace("-", "");
     final String time = fileTime.substring(11, 19).replace(":", "");
 
-    final String file_extension = Arrays.stream(path.getFileName().toString().split("\\.")).toList().getLast();
-    String fileName = String.format("%s_%s.%s", date, time, file_extension);
-
-    fileName = handleFileNameCollisions(fileNamesUsed, fileName);
-
-    return fileName;
+    final String file_extension = Arrays.stream(fileName.split("\\.")).toList().getLast();
+    return String.format("%s_%s.%s", date, time, file_extension);
   }
 
-  private static String handleFileNameCollisions(List<String> fileNamesUsed, String fileName)
+  private static String handleFileNameCollisions(final String fileName, final String directoryName)
   {
+    final int tries = 10;
+    String result = fileName;
 
-    // Check if the file name exists on the target, and if so, add a number like this:
-    // 20240206_123456.jpg -> 20240206_123456_1.jpg (increment the number when multiple duplicates exists)
-    while (fileNamesUsed.contains(fileName)) {
-      final String[] fileNameParts = fileName.split("[_\\.]"); // Split on both _ and .
-      if (fileNameParts.length == 3) // Add number one to duplicate
-        fileName = String.format("%s_%s_1.%s", fileNameParts[0], fileNameParts[1], fileNameParts[2]);
-      else if (fileNameParts.length == 4) // Increment the number to handle multiple duplicates
-        fileName = String.format("%s_%s_%d.%s", fileNameParts[0], fileNameParts[1], Integer.parseInt(fileNameParts[2]) + 1, fileNameParts[3]);
-      else throw new RuntimeException("Date-time file name has weird format: " + fileName);
+    if (fileNamesUsedInTargetLocation(directoryName).contains(result))
+      result = appendFileNamePostfix(result);
+
+    for (int i = 0; i < tries - 1; i++) {
+      if (fileNamesUsedInTargetLocation(directoryName).contains(result))
+        result = incrementFileNamePostfix(result);
+      else {
+        if (!fileName.equals(result))
+          System.out.println("File name: " + fileName + " became " + result);
+        return result;
+      }
     }
-    return fileName;
+    throw new RuntimeException(
+      String.format("Unable to find name for %s in directory %s in %d tries", fileName, directoryName, tries));
+  }
+
+  private static List<String> fileNamesUsedInTargetLocation(final String targetDirectoryName)
+  {
+    final File targetDirectory = new File(targetDirectoryName);
+    if (!targetDirectory.exists() || !targetDirectory.isDirectory())
+      throw new RuntimeException("Target directory '" + targetDirectoryName + "' does not exists");
+    try (Stream<Path> stream = Files.list(targetDirectory.toPath())) {
+      return stream.toList().stream().map(p -> p.getFileName().toString()).collect(Collectors.toList());
+    } catch (final IOException e) {
+      throw new RuntimeException("Unable to list files in target directory: " + targetDirectoryName, e);
+    }
+  }
+
+  private static String appendFileNamePostfix(final String fileName)
+  {
+    // The regular expression tells Java to split on any period that is followed by any number of non-periods, followed
+    // by the end of input. There is only one period that matches this definition (namely, the last period).
+    final String[] fileNameParts = splitFileNameBaseAndExtension(fileName);
+    return fileNameParts[0] + "_1." + fileNameParts[1];
+  }
+
+  private static String incrementFileNamePostfix(final String fileName)
+  {
+    final String[] fileNameParts = splitFileNameBaseAndExtension(fileName);
+    final String[] fileNameBaseParts = fileNameParts[0].split("_");
+    StringBuilder result = new StringBuilder();
+    for (int i = 0; i < fileNameBaseParts.length - 1; i++) {
+      result.append(fileNameBaseParts[i]).append("_");
+    }
+    result.append(Integer.parseInt(fileNameBaseParts[fileNameBaseParts.length - 1]) + 1);
+    result.append(".").append(fileNameParts[1]);
+    return result.toString();
+  }
+
+  private static String[] splitFileNameBaseAndExtension(String fileName)
+  {
+    final String[] fileNameParts = fileName.split("\\.(?=[^\\.]+$)");
+    if (fileNameParts.length != 2)
+      throw new RuntimeException("Unable to split " + fileName + " into base and extension");
+    return fileNameParts;
   }
 }
